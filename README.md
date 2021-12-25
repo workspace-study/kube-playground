@@ -5,8 +5,6 @@ Table of Content
   * [Setup](#setup)
   * [Kubernetes version](#kubernetes-version)
   * [Starting](#starting)
-  * [Examples](#examples)
-  * [Credits](#credits)
 
 A small playground to experiment or play with Kubernetes on multiple Vagrant Ubuntu `ubuntu/bionic64` instances. So do not use this as a base for production like deployments (Kubespray for example).
 
