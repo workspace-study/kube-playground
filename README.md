@@ -12,10 +12,18 @@ A small playground to experiment or play with Kubernetes on multiple Vagrant Ubu
 
 Please make sure the following is installed before using this repo:
 
-* Ansible;
-* Vagrant;
-* VirtualBox;
+* Ansible; (if in WSL: on linux)
+* Vagrant; (if in WSL: on linux)
+* VirtualBox; (if in WSL: on Windows)
 * Motivation!
+
+### WSL2 + Vagrant
+```bash
+export VAGRANT_WSL_ENABLE_WINDOWS_ACCESS="1"
+export PATH="$PATH:/mnt/c/Program Files/Oracle/VirtualBox"
+
+vagrant plugin install virtualbox_WSL2
+```
 
 ## Setup
 

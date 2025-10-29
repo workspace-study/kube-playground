@@ -21,90 +21,121 @@
       state: absent
       regexp: '^127.0.1.1'
 
-  - name: Install packages that allow apt to be used over HTTPS
-    apt:
+  - name: Install required packages
+    dnf:
       name:
-        - apt-transport-https
         - ca-certificates
         - curl
-        - gnupg-agent
-        - software-properties-common
+        - gnupg
+        - yum-utils
+        - containerd
+        - iproute-tc
       state: present
       update_cache: yes
 
-  - name: Add an apt signing key for HELM
-    apt_key:
-      url: https://baltocdn.com/helm/signing.asc
-      state: present
-
-  - name: Add an apt signing key for Docker
-    apt_key:
-      url: https://download.docker.com/linux/ubuntu/gpg
-      state: present
-
-  - name: Add apt repository for HELM version
-    apt_repository:
-      repo: deb https://baltocdn.com/helm/stable/debian/ all main
-      state: present
-
-  - name: Add apt repository for stable version
-    apt_repository:
-      repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable
-      state: present
-
-  - name: Install docker and its dependecies
-    apt:
-      name:
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-      state: present
-      update_cache: yes
-    notify:
-        - docker status
-
-  - name: Add vagrant user to docker group
-    user:
-      name: vagrant
-      group: docker
+  - name: Install Helm from script
+    shell: |
+      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+    args:
+      creates: /usr/local/bin/helm
 
   - name: Disable swap
     command: swapoff -a
 
-  - name: Add an apt signing key for Kubernetes
-    apt_key:
-      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
-      state: present
+  - name: Disable swap permanently in fstab
+    replace:
+      path: /etc/fstab
+      regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+      replace: '# \1'
 
-  - name: Adding apt repository for Kubernetes
-    apt_repository:
-      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+  - name: Load required kernel modules
+    modprobe:
+      name: "{{ item }}"
       state: present
-      filename: kubernetes.list
+    loop:
+      - overlay
+      - br_netfilter
+
+  - name: Configure kernel modules to load on boot
+    copy:
+      dest: /etc/modules-load.d/k8s.conf
+      content: |
+        overlay
+        br_netfilter
+
+  - name: Configure sysctl for Kubernetes
+    sysctl:
+      name: "{{ item.name }}"
+      value: "{{ item.value }}"
+      state: present
+      sysctl_file: /etc/sysctl.d/k8s.conf
+      reload: yes
+    loop:
+      - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+      - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+      - { name: 'net.ipv4.ip_forward', value: '1' }
+
+  - name: Disable SELinux
+    selinux:
+      state: disabled
+    ignore_errors: yes
+
+  - name: Add Kubernetes repository
+    yum_repository:
+      name: kubernetes
+      description: Kubernetes
+      baseurl: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/
+      enabled: yes
+      gpgcheck: yes
+      gpgkey: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/repodata/repomd.xml.key
+      exclude: kubelet kubeadm kubectl cri-tools kubernetes-cni
+
+  - name: Verify Kubernetes packages are available
+    command: dnf list available kubelet kubeadm kubectl --disableexcludes=kubernetes
+    register: k8s_packages_check
+    changed_when: false
+    failed_when: false
+
+  - name: Display available Kubernetes versions
+    debug:
+      var: k8s_packages_check.stdout_lines
+    when: k8s_packages_check.rc == 0
 
   - name: Install Kubernetes binaries
-    apt:
+    dnf:
       name:
-        - kubelet={{ k8s_version }}-00
-        - kubeadm={{ k8s_version }}-00
-        - kubectl={{ k8s_version }}-00
-        - helm
-        - etcd-client
+        - kubelet-{{ k8s_version }}-*
+        - kubeadm-{{ k8s_version }}-*
+        - kubectl-{{ k8s_version }}-*
       state: present
-      update_cache: yes
+      disable_excludes: kubernetes
     register: installed
+
+  - name: Configure containerd
+    shell: |
+      containerd config default > /etc/containerd/config.toml
+      sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+    args:
+      creates: /etc/containerd/config.toml
+
+  - name: Restart containerd
+    service:
+      name: containerd
+      state: restarted
+      enabled: yes
 
   - name: Configure KUBELET_EXTRA_ARGS
     copy:
-      dest: /etc/default/kubelet
+      dest: /etc/sysconfig/kubelet
       content: KUBELET_EXTRA_ARGS=" --node-ip={{ node_ip }} "
-      mode: 0755
+      mode: 0644
 
-  - name: Restart kubelet
+  - name: Enable and start kubelet
     service:
       name: kubelet
       daemon_reload: yes
-      state: restarted
+      enabled: yes
+      state: started
 
   - name: Initialize the Kubernetes cluster using kubeadm
     command: kubeadm init --apiserver-advertise-address="{{ node_ip }}" --apiserver-cert-extra-sans="{{ node_ip }}"  --node-name control --pod-network-cidr=192.168.0.0/16
@@ -162,7 +193,7 @@
       flat: True
 
   handlers:
-    - name: docker status
+    - name: containerd status
       service:
-        name: docker
+        name: containerd
         state: started
