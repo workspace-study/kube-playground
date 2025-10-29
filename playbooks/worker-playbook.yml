@@ -66,6 +66,34 @@
       - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
       - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
       - { name: 'net.ipv4.ip_forward', value: '1' }
+      - { name: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
+      - { name: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
+      - { name: 'net.ipv6.conf.lo.disable_ipv6', value: '1' }
+
+  - name: Configure IPv4 preference in DNS resolution
+    lineinfile:
+      path: /etc/gai.conf
+      line: 'precedence ::ffff:0:0/96  100'
+      create: yes
+      state: present
+
+  - name: Apply sysctl settings
+    command: sysctl --system
+
+  - name: Restart NetworkManager to apply IPv6 changes
+    service:
+      name: NetworkManager
+      state: restarted
+    ignore_errors: yes
+
+  - name: Wait for network to stabilize
+    pause:
+      seconds: 5
+
+  - name: Verify IPv6 is disabled
+    shell: sysctl net.ipv6.conf.all.disable_ipv6
+    register: ipv6_status
+    changed_when: false
 
   - name: Disable SELinux
     selinux:
@@ -101,18 +129,35 @@
       state: present
       disable_excludes: kubernetes
 
+  - name: Create containerd config directory
+    file:
+      path: /etc/containerd
+      state: directory
+      mode: '0755'
+
   - name: Configure containerd
     shell: |
       containerd config default > /etc/containerd/config.toml
       sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-    args:
-      creates: /etc/containerd/config.toml
+      sed -i 's/disabled_plugins = \[\"cri\"\]/disabled_plugins = []/' /etc/containerd/config.toml
 
   - name: Restart containerd
     service:
       name: containerd
       state: restarted
       enabled: yes
+
+  - name: Wait for containerd socket
+    wait_for:
+      path: /var/run/containerd/containerd.sock
+      timeout: 30
+
+  - name: Disable firewalld
+    service:
+      name: firewalld
+      state: stopped
+      enabled: no
+    ignore_errors: true
 
   - name: Configure KUBELET_EXTRA_ARGS
     copy:
