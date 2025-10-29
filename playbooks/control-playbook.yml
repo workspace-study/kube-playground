@@ -2,7 +2,7 @@
 - hosts: all
   become: true
   vars:
-    - cluster_name: "playground"
+    cluster_name: "playground"
 
   tasks:
   - name: "Update hosts file"
@@ -21,6 +21,11 @@
       state: absent
       regexp: '^127.0.1.1'
 
+  - name: Add Docker repository
+    command: dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+    args:
+      creates: /etc/yum.repos.d/docker-ce.repo
+
   - name: Install required packages
     dnf:
       name:
@@ -28,14 +33,20 @@
         - curl
         - gnupg
         - yum-utils
-        - containerd
+        - containerd.io
         - iproute-tc
+        - git
+        - tar
       state: present
       update_cache: yes
 
-  - name: Install Helm from script
+  - name: Install Helm
     shell: |
-      curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      curl -fsSL https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz -o /tmp/helm.tar.gz
+      tar -zxvf /tmp/helm.tar.gz -C /tmp
+      mv /tmp/linux-amd64/helm /usr/local/bin/helm
+      chmod +x /usr/local/bin/helm
+      rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
     args:
       creates: /usr/local/bin/helm
 

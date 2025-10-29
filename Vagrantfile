@@ -1,5 +1,6 @@
 IMAGE_NAME = "generic/rocky9"
 K8S_VERSION = "1.34.1"
+HELM_VERSION = "3.19.0"
 N = 1
 
 Vagrant.configure("2") do |config|
@@ -22,6 +23,7 @@ Vagrant.configure("2") do |config|
             ansible.extra_vars = {
                 node_ip: "192.168.56.10",
                 k8s_version: K8S_VERSION,
+                helm_version: HELM_VERSION,
                 ansible_python_interpreter: "/usr/bin/python3",
             }
         end

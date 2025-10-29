@@ -23,6 +23,11 @@ export VAGRANT_WSL_ENABLE_WINDOWS_ACCESS="1"
 export PATH="$PATH:/mnt/c/Program Files/Oracle/VirtualBox"
 
 vagrant plugin install virtualbox_WSL2
+
+sudo tee /etc/wsl.conf > /dev/null <<EOF
+[automount]
+options = "metadata,umask=22,fmask=11"
+EOF
 ```
 
 ## Setup
