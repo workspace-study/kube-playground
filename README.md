@@ -15,7 +15,7 @@ Please make sure the following is installed before using this repo:
 * Ansible; (if in WSL: on linux)
 * Vagrant; (if in WSL: on linux)
 * VirtualBox; (if in WSL: on Windows)
-* Motivation!
+* Motivation! 
 
 ### WSL2 + Vagrant
 ```bash
