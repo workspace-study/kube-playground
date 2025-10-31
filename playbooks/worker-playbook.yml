@@ -114,12 +114,20 @@
         - kubeadm
         - kubectl
 
-    # Join cluster
+    # Configure kubelet before joining
     - name: Check if node is already joined
       stat:
         path: /etc/kubernetes/kubelet.conf
       register: kubelet_conf
 
+    - name: Configure kubelet extra args
+      lineinfile:
+        path: /etc/default/kubelet
+        line: 'KUBELET_EXTRA_ARGS="--eviction-hard=memory.available<100Mi,nodefs.available<5%,imagefs.available<5% --eviction-soft=memory.available<150Mi,nodefs.available<10%,imagefs.available<10% --eviction-soft-grace-period=memory.available=1m,nodefs.available=1m,imagefs.available=1m --system-reserved=memory=256Mi,cpu=250m --kube-reserved=memory=256Mi,cpu=250m"'
+        create: yes
+      when: not kubelet_conf.stat.exists
+
+    # Join cluster
     - name: Copy join command from control plane
       copy:
         src: /tmp/join-command

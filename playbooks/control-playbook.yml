@@ -120,12 +120,49 @@
         path: /etc/kubernetes/admin.conf
       register: kubeadm_init
 
+    - name: Create kubeadm config
+      copy:
+        dest: /tmp/kubeadm-config.yaml
+        content: |
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: InitConfiguration
+          localAPIEndpoint:
+            advertiseAddress: {{ node_ip }}
+          nodeRegistration:
+            name: control-plane
+            kubeletExtraArgs:
+              cgroup-driver: systemd
+          ---
+          apiVersion: kubeadm.k8s.io/v1beta3
+          kind: ClusterConfiguration
+          networking:
+            podSubnet: {{ pod_network }}
+          ---
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          cgroupDriver: systemd
+          evictionHard:
+            memory.available: "100Mi"
+            nodefs.available: "5%"
+            imagefs.available: "5%"
+          evictionSoft:
+            memory.available: "200Mi"
+            nodefs.available: "10%"
+            imagefs.available: "10%"
+          evictionSoftGracePeriod:
+            memory.available: "1m"
+            nodefs.available: "1m"
+            imagefs.available: "1m"
+          systemReserved:
+            memory: "512Mi"
+            cpu: "500m"
+          kubeReserved:
+            memory: "512Mi"
+            cpu: "500m"
+      when: not kubeadm_init.stat.exists
+
     - name: Initialize Kubernetes cluster
-      command: >
-        kubeadm init
-        --apiserver-advertise-address={{ node_ip }}
-        --pod-network-cidr={{ pod_network }}
-        --node-name=control-plane
+      command: kubeadm init --config /tmp/kubeadm-config.yaml
       when: not kubeadm_init.stat.exists
       register: init_result
 
