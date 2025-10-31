@@ -1,255 +1,196 @@
 ---
 - hosts: all
   become: true
-  vars:
-    cluster_name: "playground"
-
   tasks:
-  - name: "Update hosts file"
-    lineinfile:
-      path: /etc/hosts
-      line: '{{ item }}'
-    with_items:
-      - '{{ node_ip }} control'
-      - '10.10.1.11 worker-1'
-      - '10.10.1.12 worker-2'
-      - '10.10.1.13 worker-3'
+    # System setup
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
 
-  - name: Make sure group wheel is not in the sudoers configuration
-    lineinfile:
-      path: /etc/hosts
-      state: absent
-      regexp: '^127.0.1.1'
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
 
-  - name: Add Docker repository
-    command: dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-    args:
-      creates: /etc/yum.repos.d/docker-ce.repo
+    # Disable swap
+    - name: Disable swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
 
-  - name: Install required packages
-    dnf:
-      name:
-        - ca-certificates
-        - curl
-        - gnupg
-        - yum-utils
-        - containerd.io
-        - iproute-tc
-        - git
-        - tar
-      state: present
-      update_cache: yes
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '\sswap\s'
+        state: absent
 
-  - name: Install Helm
-    shell: |
-      curl -fsSL https://get.helm.sh/helm-v{{ helm_version }}-linux-amd64.tar.gz -o /tmp/helm.tar.gz
-      tar -zxvf /tmp/helm.tar.gz -C /tmp
-      mv /tmp/linux-amd64/helm /usr/local/bin/helm
-      chmod +x /usr/local/bin/helm
-      rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
-    args:
-      creates: /usr/local/bin/helm
+    # Load kernel modules
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
 
-  - name: Disable swap
-    command: swapoff -a
+    - name: Make kernel modules persistent
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
 
-  - name: Disable swap permanently in fstab
-    replace:
-      path: /etc/fstab
-      regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
-      replace: '# \1'
+    # Configure sysctl
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/k8s.conf
+        reload: yes
+      loop:
+        - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { key: 'net.ipv4.ip_forward', value: '1' }
 
-  - name: Load required kernel modules
-    modprobe:
-      name: "{{ item }}"
-      state: present
-    loop:
-      - overlay
-      - br_netfilter
+    # Install containerd
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
 
-  - name: Configure kernel modules to load on boot
-    copy:
-      dest: /etc/modules-load.d/k8s.conf
-      content: |
-        overlay
-        br_netfilter
-
-  - name: Configure sysctl for Kubernetes
-    sysctl:
-      name: "{{ item.name }}"
-      value: "{{ item.value }}"
-      state: present
-      sysctl_file: /etc/sysctl.d/k8s.conf
-      reload: yes
-    loop:
-      - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
-      - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
-      - { name: 'net.ipv4.ip_forward', value: '1' }
-      - { name: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
-      - { name: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
-      - { name: 'net.ipv6.conf.lo.disable_ipv6', value: '1' }
-
-  - name: Configure IPv4 preference in DNS resolution
-    lineinfile:
-      path: /etc/gai.conf
-      line: 'precedence ::ffff:0:0/96  100'
-      create: yes
-      state: present
-
-  - name: Apply sysctl settings
-    command: sysctl --system
-
-  - name: Restart NetworkManager to apply IPv6 changes
-    service:
-      name: NetworkManager
-      state: restarted
-    ignore_errors: yes
-
-  - name: Wait for network to stabilize
-    pause:
-      seconds: 5
-
-  - name: Verify IPv6 is disabled
-    shell: sysctl net.ipv6.conf.all.disable_ipv6
-    register: ipv6_status
-    changed_when: false
-
-  - name: Disable SELinux
-    selinux:
-      state: disabled
-    ignore_errors: yes
-
-  - name: Add Kubernetes repository
-    yum_repository:
-      name: kubernetes
-      description: Kubernetes
-      baseurl: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/
-      enabled: yes
-      gpgcheck: yes
-      gpgkey: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/repodata/repomd.xml.key
-      exclude: kubelet kubeadm kubectl cri-tools kubernetes-cni
-
-  - name: Verify Kubernetes packages are available
-    command: dnf list available kubelet kubeadm kubectl --disableexcludes=kubernetes
-    register: k8s_packages_check
-    changed_when: false
-    failed_when: false
-
-  - name: Display available Kubernetes versions
-    debug:
-      var: k8s_packages_check.stdout_lines
-    when: k8s_packages_check.rc == 0
-
-  - name: Install Kubernetes binaries
-    dnf:
-      name:
-        - kubelet-{{ k8s_version }}-*
-        - kubeadm-{{ k8s_version }}-*
-        - kubectl-{{ k8s_version }}-*
-      state: present
-      disable_excludes: kubernetes
-    register: installed
-
-  - name: Create containerd config directory
-    file:
-      path: /etc/containerd
-      state: directory
-      mode: '0755'
-
-  - name: Configure containerd
-    shell: |
-      containerd config default > /etc/containerd/config.toml
-      sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-      sed -i 's/disabled_plugins = \[\"cri\"\]/disabled_plugins = []/' /etc/containerd/config.toml
-
-  - name: Restart containerd
-    service:
-      name: containerd
-      state: restarted
-      enabled: yes
-
-  - name: Wait for containerd socket
-    wait_for:
-      path: /var/run/containerd/containerd.sock
-      timeout: 30
-
-  - name: Disable firewalld
-    service:
-      name: firewalld
-      state: stopped
-      enabled: no
-    ignore_errors: true
-
-  - name: Configure KUBELET_EXTRA_ARGS
-    copy:
-      dest: /etc/sysconfig/kubelet
-      content: KUBELET_EXTRA_ARGS=" --node-ip={{ node_ip }} "
-      mode: 0644
-
-  - name: Enable and start kubelet
-    service:
-      name: kubelet
-      daemon_reload: yes
-      enabled: yes
-      state: started
-
-  - name: Initialize the Kubernetes cluster using kubeadm
-    command: kubeadm init --apiserver-advertise-address="{{ node_ip }}" --apiserver-cert-extra-sans="{{ node_ip }}"  --node-name control --pod-network-cidr=192.168.0.0/16
-    when: installed is changed
-
-  - name: Create .kube folder
-    become: false
-    file:
-      path: /home/vagrant/.kube
-      state: directory
-
-  - name: Copy admin.conf file
-    copy:
-      src: /etc/kubernetes/admin.conf
-      dest: /home/vagrant/.kube/config
-      remote_src: True
-
-  - name: Change admin.conf owner
-    file:
-      path: /home/vagrant/.kube/config
-      owner: vagrant
-      group: vagrant
-      mode: 0400
-
-  - name: Change the clusterName - ConfigMap
-    become: false
-    shell: 
-      "kubectl get cm kubeadm-config -n kube-system -o yaml | sed -e '12s|kubernetes|{{ cluster_name }}|' | kubectl apply -f -"
-
-  - name: Change the clusterName - Kubeconfig
-    become: false
-    command: "{{ item }}"
-    with_items:
-      - sed -i '6s/kubernetes/{{ cluster_name }}/' ~/.kube/config
-      - sed -i '9s/kubernetes/{{ cluster_name }}/' ~/.kube/config
-      - sed -i '11s/kubernetes-adm@kubernetes/{{ cluster_name }}/' ~/.kube/config
-      - sed -i '12s/kubernetes-adm@kubernetes/{{ cluster_name }}/' ~/.kube/config
-  
-  - name: Install calico pod network
-    become: false
-    command: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
-
-  - name: Bash autocompletion
-    become: false
-    shell: kubectl completion bash >> ~/.bashrc
-
-  - name: Generate join command
-    shell: kubeadm token create --print-join-command 2>/dev/null > /tmp/join
-    register: join_command
-
-  - name: Copy join command to local file
-    fetch:
-      src: /tmp/join
-      dest: /tmp/join
-      flat: True
-
-  handlers:
-    - name: containerd status
-      service:
+    - name: Install containerd
+      apt:
         name: containerd
-        state: started
+        state: present
+
+    - name: Configure containerd
+      shell: containerd config default | tee /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Enable SystemdCgroup in containerd
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup = false'
+        line: '            SystemdCgroup = true'
+
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    # Install Kubernetes
+    - name: Add Kubernetes apt key
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        state: present
+
+    - name: Add Kubernetes repository
+      apt_repository:
+        repo: deb https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /
+        state: present
+
+    - name: Install Kubernetes packages
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Hold Kubernetes packages
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    # Initialize cluster
+    - name: Check if cluster is initialized
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Initialize Kubernetes cluster
+      command: >
+        kubeadm init
+        --apiserver-advertise-address={{ node_ip }}
+        --pod-network-cidr={{ pod_network }}
+        --node-name=control
+      when: not kubeadm_init.stat.exists
+      register: init_result
+
+    - name: Create .kube directory
+      become: false
+      file:
+        path: /home/vagrant/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /home/vagrant/.kube/config
+        remote_src: yes
+        owner: vagrant
+        group: vagrant
+        mode: '0600'
+
+    # Install Cilium
+    - name: Download Cilium CLI
+      get_url:
+        url: https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-amd64.tar.gz
+        dest: /tmp/cilium-cli.tar.gz
+
+    - name: Extract Cilium CLI
+      unarchive:
+        src: /tmp/cilium-cli.tar.gz
+        dest: /usr/local/bin
+        remote_src: yes
+
+    - name: Install Cilium
+      become: false
+      shell: |
+        cilium install --version 1.16.5
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+      when: init_result is changed
+
+    - name: Wait for Cilium to be ready
+      become: false
+      shell: cilium status --wait
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+      when: init_result is changed
+      retries: 30
+      delay: 10
+      register: cilium_status
+      until: cilium_status.rc == 0
+
+    # Generate join command
+    - name: Generate join command
+      shell: kubeadm token create --print-join-command
+      register: join_command
+      when: init_result is changed
+
+    - name: Save join command
+      copy:
+        content: "{{ join_command.stdout }}"
+        dest: /tmp/join-command
+      when: init_result is changed
+
+    - name: Fetch join command
+      fetch:
+        src: /tmp/join-command
+        dest: /tmp/join-command
+        flat: yes
+      when: init_result is changed

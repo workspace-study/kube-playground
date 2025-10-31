@@ -1,189 +1,131 @@
 ---
 - hosts: all
   become: true
-
   tasks:
-  - name: "Update hosts file"
-    lineinfile:
-      path: /etc/hosts
-      line: '{{ item }}'
-    with_items:
-      - '{{ control_node_ip }} control'
-      - '10.10.1.11 worker-1'
-      - '10.10.1.12 worker-2'
-      - '10.10.1.13 worker-3'
+    # System setup
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
 
-  - name: Make sure group wheel is not in the sudoers configuration
-    lineinfile:
-      path: /etc/hosts
-      state: absent
-      regexp: '^127.0.1.1'
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
 
-  - name: Install required packages
-    dnf:
-      name:
-        - ca-certificates
-        - curl
-        - gnupg
-        - yum-utils
-        - containerd
-        - iproute-tc
-      state: present
-      update_cache: yes
+    # Disable swap
+    - name: Disable swap
+      command: swapoff -a
+      when: ansible_swaptotal_mb > 0
 
-  - name: Disable swap
-    command: swapoff -a
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '\sswap\s'
+        state: absent
 
-  - name: Disable swap permanently in fstab
-    replace:
-      path: /etc/fstab
-      regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
-      replace: '# \1'
+    # Load kernel modules
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
 
-  - name: Load required kernel modules
-    modprobe:
-      name: "{{ item }}"
-      state: present
-    loop:
-      - overlay
-      - br_netfilter
+    - name: Make kernel modules persistent
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
 
-  - name: Configure kernel modules to load on boot
-    copy:
-      dest: /etc/modules-load.d/k8s.conf
-      content: |
-        overlay
-        br_netfilter
+    # Configure sysctl
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/k8s.conf
+        reload: yes
+      loop:
+        - { key: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { key: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { key: 'net.ipv4.ip_forward', value: '1' }
 
-  - name: Configure sysctl for Kubernetes
-    sysctl:
-      name: "{{ item.name }}"
-      value: "{{ item.value }}"
-      state: present
-      sysctl_file: /etc/sysctl.d/k8s.conf
-      reload: yes
-    loop:
-      - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
-      - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
-      - { name: 'net.ipv4.ip_forward', value: '1' }
-      - { name: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
-      - { name: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
-      - { name: 'net.ipv6.conf.lo.disable_ipv6', value: '1' }
+    # Install containerd
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
 
-  - name: Configure IPv4 preference in DNS resolution
-    lineinfile:
-      path: /etc/gai.conf
-      line: 'precedence ::ffff:0:0/96  100'
-      create: yes
-      state: present
+    - name: Install containerd
+      apt:
+        name: containerd
+        state: present
 
-  - name: Apply sysctl settings
-    command: sysctl --system
+    - name: Configure containerd
+      shell: containerd config default | tee /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
 
-  - name: Restart NetworkManager to apply IPv6 changes
-    service:
-      name: NetworkManager
-      state: restarted
-    ignore_errors: yes
+    - name: Enable SystemdCgroup in containerd
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup = false'
+        line: '            SystemdCgroup = true'
 
-  - name: Wait for network to stabilize
-    pause:
-      seconds: 5
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
 
-  - name: Verify IPv6 is disabled
-    shell: sysctl net.ipv6.conf.all.disable_ipv6
-    register: ipv6_status
-    changed_when: false
+    # Install Kubernetes
+    - name: Add Kubernetes apt key
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        state: present
 
-  - name: Disable SELinux
-    selinux:
-      state: disabled
+    - name: Add Kubernetes repository
+      apt_repository:
+        repo: deb https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /
+        state: present
 
-  - name: Add Kubernetes repository
-    yum_repository:
-      name: kubernetes
-      description: Kubernetes
-      baseurl: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/
-      enabled: yes
-      gpgcheck: yes
-      gpgkey: https://pkgs.k8s.io/core:/stable:/v1.34/rpm/repodata/repomd.xml.key
-      exclude: kubelet kubeadm kubectl cri-tools kubernetes-cni
+    - name: Install Kubernetes packages
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
 
-  - name: Verify Kubernetes packages are available
-    command: dnf list available kubelet kubeadm kubectl --disableexcludes=kubernetes
-    register: k8s_packages_check
-    changed_when: false
-    failed_when: false
+    - name: Hold Kubernetes packages
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
 
-  - name: Display available Kubernetes versions
-    debug:
-      var: k8s_packages_check.stdout_lines
-    when: k8s_packages_check.rc == 0
+    # Join cluster
+    - name: Check if node is already joined
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
 
-  - name: Install Kubernetes binaries
-    dnf:
-      name:
-        - kubelet-{{ k8s_version }}-*
-        - kubeadm-{{ k8s_version }}-*
-        - kubectl-{{ k8s_version }}-*
-      state: present
-      disable_excludes: kubernetes
+    - name: Copy join command from control plane
+      copy:
+        src: /tmp/join-command
+        dest: /tmp/join-command
+      when: not kubelet_conf.stat.exists
 
-  - name: Create containerd config directory
-    file:
-      path: /etc/containerd
-      state: directory
-      mode: '0755'
-
-  - name: Configure containerd
-    shell: |
-      containerd config default > /etc/containerd/config.toml
-      sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-      sed -i 's/disabled_plugins = \[\"cri\"\]/disabled_plugins = []/' /etc/containerd/config.toml
-
-  - name: Restart containerd
-    service:
-      name: containerd
-      state: restarted
-      enabled: yes
-
-  - name: Wait for containerd socket
-    wait_for:
-      path: /var/run/containerd/containerd.sock
-      timeout: 30
-
-  - name: Disable firewalld
-    service:
-      name: firewalld
-      state: stopped
-      enabled: no
-    ignore_errors: true
-
-  - name: Configure KUBELET_EXTRA_ARGS
-    copy:
-      dest: /etc/sysconfig/kubelet
-      content: KUBELET_EXTRA_ARGS=" --node-ip={{ node_ip }} "
-      mode: 0644
-
-  - name: Enable and start kubelet
-    service:
-      name: kubelet
-      daemon_reload: yes
-      enabled: yes
-      state: started
-
-  - name: Copy the join command to server location
-    copy:
-      src: /tmp/join
-      dest: /tmp/join-command.sh
-      mode: 0777
-    become: false
-
-  - name: Join the node to cluster
-    command: sh /tmp/join-command.sh
-
-  handlers:
-  - name: containerd status
-    service:
-      name: containerd
-      state: started
+    - name: Join the cluster
+      shell: bash /tmp/join-command
+      when: not kubelet_conf.stat.exists
