@@ -71,23 +71,7 @@ Pods are evicted when resources are low. Current thresholds prevent aggressive e
 
 **To avoid pod restarts**: Don't schedule pods that use more than the available memory listed above.
 
-### Files Modified
-- VM resources: `Vagrantfile`
-- Control kubelet: `playbooks/control-playbook.yml` (lines 123-167)
-- Worker kubelet: `playbooks/worker-playbook.yml` (lines 123-128)
-
-## Change Cluster Name
-
-Clyster name could be changed inside the file `control-playbook.yaml` in `playbook` dir.
-
-Inside the file, change the line that start on line 5:
-
-```sh
-  vars:
-    - cluster_name: "<here-cluster-name>""
-```
-
-## Kubernetes version
+# Kubernetes version
 
 Current version: **1.34** (configurable)
 
