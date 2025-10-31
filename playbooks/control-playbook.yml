@@ -125,7 +125,7 @@
         kubeadm init
         --apiserver-advertise-address={{ node_ip }}
         --pod-network-cidr={{ pod_network }}
-        --node-name=control
+        --node-name=control-plane
       when: not kubeadm_init.stat.exists
       register: init_result
 
