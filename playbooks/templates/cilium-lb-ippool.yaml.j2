@@ -1,0 +1,9 @@
+---
+apiVersion: "cilium.io/v2alpha1"
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: "main-home-cluster-pool"
+spec:
+  blocks:
+  - start: "{{ lb_ip_start }}"
+    stop: "{{ lb_ip_end }}"

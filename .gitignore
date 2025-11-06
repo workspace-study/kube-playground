@@ -3,3 +3,4 @@
 .vagrant/
 examples/
 join
+.env
