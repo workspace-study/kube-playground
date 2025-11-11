@@ -294,7 +294,7 @@
 
     - name: Copy Cilium L2 announcement policy
       copy:
-        src: "../manifests/cilium-l2-announcement.yaml"
+        src: "../manifests/cilium/cilium-l2-announcement.yaml"
         dest: "/tmp/cilium-l2-announcement.yaml"
       when: init_result is changed
 
