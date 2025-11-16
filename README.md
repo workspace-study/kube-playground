@@ -93,6 +93,9 @@ Get-NetAdapter | Select-Object Name, InterfaceDescription
 # ----                   --------------------
 # Wi-Fi                  Killer(R) Wi-Fi 6 AX1650i 160MHz Wireless Network Adapter (201NGW)
 # Ethernet               Realtek PCIe GbE Family Controller
+
+# Disable IPv6
+Disable-NetAdapterBinding -Name "$INTERFACE_NAME" -ComponentID ms_tcpip6
 ```
 
 Then add to your `.env` file (use the **InterfaceDescription**):

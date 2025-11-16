@@ -37,7 +37,12 @@ LB_IP_START = "#{BRIDGE_NETWORK}.#{ENV['LB_IP_START'] || '60'}"
 LB_IP_END = "#{BRIDGE_NETWORK}.#{ENV['LB_IP_END'] || '99'}"
 
 Vagrant.configure("2") do |config|
-    config.ssh.insert_key = false
+    # Increase boot timeout to prevent premature failures
+    config.vm.boot_timeout = 600
+
+    # SSH timeout settings
+    config.vm.communicator = "ssh"
+    config.ssh.connect_timeout = 60
 
     config.vm.provider "virtualbox" do |v|
         v.linked_clone = true
@@ -45,11 +50,16 @@ Vagrant.configure("2") do |config|
         v.customize ["modifyvm", :id, "--usb", "off"]
         v.customize ["modifyvm", :id, "--uart1", "0x3F8", "4"]
         v.customize ["modifyvm", :id, "--uartmode1", "disconnected"]
+
+        # Performance optimizations
+        v.customize ["modifyvm", :id, "--ioapic", "on"]
+        v.customize ["modifyvm", :id, "--paravirtprovider", "kvm"]
+        v.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
+        v.customize ["modifyvm", :id, "--natdnsproxy1", "on"]
     end
 
     config.vm.define "control" do |control|
         control.vm.box = IMAGE_NAME
-        # Public network (bridged) - conditionally set bridge adapter
         if BRIDGE_ADAPTER
             control.vm.network "public_network", ip: CONTROL_IP_PUBLIC, bridge: BRIDGE_ADAPTER
         else
@@ -80,19 +90,16 @@ Vagrant.configure("2") do |config|
     (1..N).each do |i|
         config.vm.define "worker-#{i}" do |worker|
             worker.vm.box = IMAGE_NAME
-            # Public network (bridged) for LoadBalancer access - enp0s8
             if BRIDGE_ADAPTER
                 worker.vm.network "public_network", ip: "#{BRIDGE_NETWORK}.#{WORKER_IP_PUBLIC_START + i - 1}", bridge: BRIDGE_ADAPTER
             else
                 worker.vm.network "public_network", ip: "#{BRIDGE_NETWORK}.#{WORKER_IP_PUBLIC_START + i - 1}"
             end
-            # Private network for cluster communication - enp0s9
             worker.vm.network "private_network", ip: "#{PRIVATE_NETWORK}.#{WORKER_IP_PRIVATE_START + i - 1}"
             worker.vm.hostname = "worker-#{i}"
             worker.vm.provider "virtualbox" do |v|
                 v.memory = WORKER_NODE_MEMORY
                 v.cpus = WORKER_NODE_CPU
-                # Enable promiscuous mode for L2 announcements to work
                 v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
             end
 
