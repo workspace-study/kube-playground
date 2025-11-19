@@ -9,14 +9,7 @@ mkdir -p ~/.kube
 echo "Fetching kubeconfig from control plane..."
 vagrant ssh control -c "sudo cat /etc/kubernetes/admin.conf" > ~/.kube/vagrant-k8s-config
 
-if [ ! -s ~/.kube/vagrant-k8s-config ]; then
-    echo "Error: Failed to fetch kubeconfig from control plane"
-    exit 1
-fi
-
-# Load .env from script directory (only the variables we need)
 if [ -f "$SCRIPT_DIR/.env" ]; then
-    # Extract only the variables we need, avoiding problematic ones like BRIDGE_ADAPTER
     eval "$(grep -E '^(BRIDGE_NETWORK|CONTROL_IP_PUBLIC|CONTEXT_NAME)=' "$SCRIPT_DIR/.env")"
 else
     echo "Warning: .env not found, using defaults"
