@@ -1,0 +1,57 @@
+#!/bin/bash
+# Kubernetes Node Cleanup Script
+# Runs every hour via cron to keep disk usage low
+
+LOG_FILE="/var/log/k8s-cleanup.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+log "Starting cleanup..."
+
+# Get disk usage before cleanup
+BEFORE=$(df -h / | tail -1 | awk '{print $5}')
+
+# Prune unused container images
+if command -v crictl &> /dev/null; then
+    crictl rmi --prune 2>/dev/null
+    log "Pruned unused container images"
+fi
+
+# Clean containerd garbage
+if command -v ctr &> /dev/null; then
+    ctr -n k8s.io images prune --all 2>/dev/null
+    log "Cleaned containerd images"
+fi
+
+# Clean old journal logs (keep last 3 days)
+journalctl --vacuum-time=3d 2>/dev/null
+log "Cleaned journal logs"
+
+# Remove old compressed logs
+find /var/log -name "*.gz" -type f -mtime +3 -delete 2>/dev/null
+find /var/log -name "*.1" -type f -mtime +3 -delete 2>/dev/null
+find /var/log -name "*.old" -type f -mtime +3 -delete 2>/dev/null
+log "Removed old log files"
+
+# Clean apt cache
+apt-get clean 2>/dev/null
+log "Cleaned apt cache"
+
+# Clean tmp directories (files older than 7 days)
+find /tmp -type f -mtime +7 -delete 2>/dev/null
+find /var/tmp -type f -mtime +7 -delete 2>/dev/null
+log "Cleaned temp directories"
+
+# Get disk usage after cleanup
+AFTER=$(df -h / | tail -1 | awk '{print $5}')
+FREE=$(df -h / | tail -1 | awk '{print $4}')
+
+log "Cleanup completed. Disk usage: $BEFORE -> $AFTER (Free: $FREE)"
+
+# Rotate cleanup log if too large (> 1MB)
+if [ -f "$LOG_FILE" ] && [ $(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE") -gt 1048576 ]; then
+    tail -100 "$LOG_FILE" > "$LOG_FILE.tmp"
+    mv "$LOG_FILE.tmp" "$LOG_FILE"
+fi
