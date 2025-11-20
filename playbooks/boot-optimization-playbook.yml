@@ -1,0 +1,101 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    # Disable snapd (saves ~10s)
+    - name: Stop snapd services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - snapd.service
+        - snapd.seeded.service
+        - snapd.socket
+      ignore_errors: yes
+
+    - name: Disable and mask snapd services
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+        masked: yes
+      loop:
+        - snapd.service
+        - snapd.seeded.service
+        - snapd.socket
+      ignore_errors: yes
+
+    - name: Remove snapd package
+      apt:
+        name: snapd
+        state: absent
+        purge: yes
+
+    - name: Remove snap directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /snap
+        - /var/snap
+        - /var/lib/snapd
+
+    # Disable keyboard-setup for headless (saves ~28s on control)
+    - name: Mask keyboard-setup for headless server
+      systemd:
+        name: keyboard-setup.service
+        masked: yes
+
+    # Speed up network wait (saves ~10s)
+    - name: Create networkd-wait-online override directory
+      file:
+        path: /etc/systemd/system/systemd-networkd-wait-online.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Configure networkd to not wait for all interfaces
+      copy:
+        dest: /etc/systemd/system/systemd-networkd-wait-online.service.d/override.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any --timeout=10
+        mode: '0644'
+
+    # Optimize cloud-init (saves ~2-3s)
+    - name: Disable cloud-init network config
+      copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        content: "network: {config: disabled}"
+
+    # Disable unnecessary services
+    - name: Disable unnecessary services
+      systemd:
+        name: "{{ item }}"
+        enabled: no
+        masked: yes
+      loop:
+        - lxd-agent.service
+        - lxd-agent-9p.service
+      ignore_errors: yes
+
+    # Blacklist unnecessary kernel modules (saves ~5-10s)
+    - name: Blacklist RAID modules not needed for VM
+      copy:
+        dest: /etc/modprobe.d/blacklist-raid.conf
+        content: |
+          # Disable RAID modules - not needed for VirtualBox VM
+          blacklist raid6_pq
+          blacklist raid456
+          blacklist raid1
+          blacklist raid0
+          blacklist dm_raid
+        mode: '0644'
+
+    # Reload systemd
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Display optimization complete message
+      debug:
+        msg: "Boot optimization complete. Reboot to see improvements."

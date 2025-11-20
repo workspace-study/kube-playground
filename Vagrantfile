@@ -22,6 +22,12 @@ WORKER_NODE_MEMORY = ENV['WORKER_MEMORY'] || 2048
 WORKER_NODE_CPU = ENV['WORKER_CPUS'] || 2
 N = ENV['NUM_WORKERS'] ? ENV['NUM_WORKERS'].to_i : 1
 
+# # DISK SIZE (requires vagrant-disksize plugin: vagrant plugin install vagrant-disksize)
+# # Note: Plugin may have issues on Windows/WSL2 - disk sizing will be skipped if plugin unavailable
+# CONTROL_DISK_SIZE = ENV['CONTROL_DISK'] || "80GB"
+# WORKER_DISK_SIZE = ENV['WORKER_DISK'] || "60GB"
+# DISKSIZE_PLUGIN_AVAILABLE = Vagrant.has_plugin?("vagrant-disksize")
+
 # NETWORK
 BRIDGE_NETWORK = ENV['BRIDGE_NETWORK'] || "192.168.1"
 PRIVATE_NETWORK = ENV['PRIVATE_NETWORK'] || "192.168.56"
@@ -60,6 +66,7 @@ Vagrant.configure("2") do |config|
 
     config.vm.define "control" do |control|
         control.vm.box = IMAGE_NAME
+        # control.disksize.size = CONTROL_DISK_SIZE if DISKSIZE_PLUGIN_AVAILABLE && !Vagrant::Util::Platform.windows?
         if BRIDGE_ADAPTER
             control.vm.network "public_network", ip: CONTROL_IP_PUBLIC, bridge: BRIDGE_ADAPTER
         else
@@ -71,6 +78,8 @@ Vagrant.configure("2") do |config|
             v.memory = CONTROL_PLANE_MEMORY
             v.cpus = CONTROL_PLANE_CPU
             v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+            # Speed up storage I/O
+            v.customize ["storagectl", :id, "--name", "SCSI", "--hostiocache", "on"]
         end
         control.vm.provision "ansible" do |ansible|
             ansible.playbook = "./playbooks/control-playbook.yml"
@@ -85,11 +94,15 @@ Vagrant.configure("2") do |config|
                 bridge_network: BRIDGE_NETWORK,
             }
         end
+        control.vm.provision "boot-optimization", type: "ansible" do |ansible|
+            ansible.playbook = "./playbooks/boot-optimization-playbook.yml"
+        end
     end
 
     (1..N).each do |i|
         config.vm.define "worker-#{i}" do |worker|
             worker.vm.box = IMAGE_NAME
+            # worker.disksize.size = WORKER_DISK_SIZE if DISKSIZE_PLUGIN_AVAILABLE && !Vagrant::Util::Platform.windows?
             if BRIDGE_ADAPTER
                 worker.vm.network "public_network", ip: "#{BRIDGE_NETWORK}.#{WORKER_IP_PUBLIC_START + i - 1}", bridge: BRIDGE_ADAPTER
             else
@@ -101,6 +114,8 @@ Vagrant.configure("2") do |config|
                 v.memory = WORKER_NODE_MEMORY
                 v.cpus = WORKER_NODE_CPU
                 v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+                # Speed up storage I/O
+                v.customize ["storagectl", :id, "--name", "SCSI", "--hostiocache", "on"]
             end
 
             worker.vm.provision "ansible" do |ansible|
@@ -111,6 +126,9 @@ Vagrant.configure("2") do |config|
                     k8s_version: K8S_VERSION,
                     bridge_network: BRIDGE_NETWORK,
                 }
+            end
+            worker.vm.provision "boot-optimization", type: "ansible" do |ansible|
+                ansible.playbook = "./playbooks/boot-optimization-playbook.yml"
             end
         end
     end

@@ -188,3 +188,17 @@
     - name: Join the cluster
       shell: bash /tmp/join-command
       when: not kubelet_conf.stat.exists
+
+    # Node cleanup cron job
+    - name: Deploy cleanup script
+      template:
+        src: "templates/cleanup-node.sh.j2"
+        dest: "/usr/local/bin/cleanup-node.sh"
+        mode: '0755'
+
+    - name: Setup cleanup cron job (every hour)
+      cron:
+        name: "Kubernetes node cleanup"
+        minute: "0"
+        job: "/usr/local/bin/cleanup-node.sh"
+        user: root

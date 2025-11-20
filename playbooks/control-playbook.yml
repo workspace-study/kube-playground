@@ -256,7 +256,7 @@
         dest: /usr/local/bin
         remote_src: yes
 
-    - name: Install Cilium with LoadBalancer support
+    - name: Install Cilium with LoadBalancer and Gateway API support
       become: false
       shell: |
         cilium install --version {{ cilium_version }} \
@@ -269,7 +269,8 @@
           --set k8sServicePort=6443 \
           --set ipv4NativeRoutingCIDR={{ pod_network }} \
           --set routingMode=tunnel \
-          --set devices='{enp0s8,enp0s9}'
+          --set devices='{enp0s8,enp0s9}' \
+          --set gatewayAPI.enabled=true
       environment:
         KUBECONFIG: /home/vagrant/.kube/config
       when: init_result is changed
@@ -330,3 +331,17 @@
         dest: /tmp/join-command
         flat: yes
       when: init_result is changed
+
+    # Node cleanup cron job
+    - name: Deploy cleanup script
+      template:
+        src: "templates/cleanup-node.sh.j2"
+        dest: "/usr/local/bin/cleanup-node.sh"
+        mode: '0755'
+
+    - name: Setup cleanup cron job (every hour)
+      cron:
+        name: "Kubernetes node cleanup"
+        minute: "0"
+        job: "/usr/local/bin/cleanup-node.sh"
+        user: root
