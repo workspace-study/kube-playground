@@ -1,0 +1,2 @@
+# Ignore local environment configuration
+.env
